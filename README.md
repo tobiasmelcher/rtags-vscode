@@ -5,6 +5,7 @@
 - call hierarchy tree items include file name and line number
 - introduce workspace setting `"rtags.rcExecutable"` to specify path to the rc executable
 - command updateCompileCommands
+- call hierarchy uses now rc argument "all-targets" to include all where used entries
 
 ## This is the README for the "rtags client" 
 -------------------

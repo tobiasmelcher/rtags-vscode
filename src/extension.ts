@@ -92,7 +92,7 @@ function runRC(args: string[], process: (stdout: string) => any, doc?: TextDocum
 function getCallers(document: TextDocument, uri: Uri, p: Position): Thenable<Caller[]> {
 	const at = toRtagsPos(uri, p);
 
-	let args = ['-K', '-o', '--containing-function-location', '-r', at, '--json'];
+	let args = ['-K', '-o', /*'--containing-function-location'*/ '--all-targets', '-r', at, '--json'];
 
 	return runRC(args,
 		function (output: string) {
@@ -102,17 +102,29 @@ function getCallers(document: TextDocument, uri: Uri, p: Position): Thenable<Cal
 
 			for (let c of o) {
 				try {
-					let containerLocation = parsePath(c.cfl);
+					let pa = c.cfl;
+					if (pa==null) {
+						pa = c.loc;
+					}
+					let containerLocation = parsePath(pa);
 					let doc = workspace.textDocuments.find(
 						(v, _i) => { return v.uri.fsPath == containerLocation.uri.fsPath }
 					)
+					let contName = "";
+					if (c.cf!=null) {
+						contName = c.cf.trim();
+					}
+					let ctxtStr = "";
+					if (c.ctx!=null) {
+					  ctxtStr=c.ctx.trim();
+					}
 					result.push(
 						{
 							location: parsePath(c.loc),
-							containerName: c.cf.trim(),
+							containerName: contName,
 							containerLocation: containerLocation,
 							document: doc,
-							context: c.ctx.trim(),
+							context: ctxtStr,
 						});
 				}
 				catch (err) {
