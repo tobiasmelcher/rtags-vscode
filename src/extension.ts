@@ -1,9 +1,10 @@
 'use strict';
 
-import { CompletionItemKind, CancellationToken, DiagnosticSeverity, Disposable, Diagnostic, ExtensionContext, languages, TextDocument, Position, CompletionItemProvider, WorkspaceSymbolProvider, SymbolInformation,  Uri, Location, ImplementationProvider, DefinitionProvider, ReferenceProvider, ReferenceContext, RenameProvider, ProviderResult, WorkspaceEdit, window, Range, workspace, CodeActionProvider, CodeActionContext, Command, commands, SignatureHelpProvider, SignatureHelp, Definition, CompletionList, HoverProvider, Hover, SignatureInformation, TypeDefinitionProvider, DocumentSymbolProvider, TreeDataProvider, TreeItem, EventEmitter, Event, TreeItemCollapsibleState, SnippetString } from 'vscode';
+import { CompletionItemKind, CancellationToken, DiagnosticSeverity, Disposable, Diagnostic, ExtensionContext, languages, TextDocument, Position, CompletionItemProvider, WorkspaceSymbolProvider, SymbolInformation, Uri, Location, ImplementationProvider, DefinitionProvider, ReferenceProvider, ReferenceContext, RenameProvider, ProviderResult, WorkspaceEdit, window, Range, workspace, CodeActionProvider, CodeActionContext, Command, commands, SignatureHelpProvider, SignatureHelp, Definition, CompletionList, HoverProvider, Hover, SignatureInformation, TypeDefinitionProvider, DocumentSymbolProvider, TreeDataProvider, TreeItem, EventEmitter, Event, TreeItemCollapsibleState, SnippetString } from 'vscode';
 import { execFile, spawn } from 'child_process'
 import { setTimeout, clearTimeout } from 'timers';
-
+import { sep } from 'path';
+import { fstat, existsSync, readFileSync, writeFileSync } from 'fs';
 
 let dc = languages.createDiagnosticCollection("RTAGS");
 
@@ -14,129 +15,121 @@ const RTAGS_MODE = [
 
 var ReferenceType =
 {
-	DEFINITION : 0,
-	VIRTUALS : 1,
-	REFERENCES : 2,
-	RENAME : 3,
+	DEFINITION: 0,
+	VIRTUALS: 1,
+	REFERENCES: 2,
+	RENAME: 3,
 	SYMBOL_INFO: 4
 };
 
-function convertKind(kind: string) : CompletionItemKind
-{
-	switch(kind)
-	{
-		case "FieldDecl" :
+function convertKind(kind: string): CompletionItemKind {
+	switch (kind) {
+		case "FieldDecl":
 			return CompletionItemKind.Field;
-		case "ParmDecl" :
+		case "ParmDecl":
 			return CompletionItemKind.Variable;
-		case "Namespace" :
+		case "Namespace":
 			return CompletionItemKind.Module;
-		case "FunctionDecl" :
+		case "FunctionDecl":
 			return CompletionItemKind.Function;
-		case "VarDecl" :
+		case "VarDecl":
 			return CompletionItemKind.Variable;
-		case "CXXMethod" :
+		case "CXXMethod":
 			return CompletionItemKind.Method;
-		case "CXXDestructor" :
+		case "CXXDestructor":
 			return CompletionItemKind.Constructor;
-		case "CXXConstructor" :
+		case "CXXConstructor":
 			return CompletionItemKind.Constructor;
-		case "EnumDecl" :
+		case "EnumDecl":
 			return CompletionItemKind.Enum;
-		case "ClassDecl" :
-		case "StructDecl" :
+		case "ClassDecl":
+		case "StructDecl":
 			return CompletionItemKind.Class;
 	}
 	return CompletionItemKind.Keyword;
 }
 
-function parsePath(path: string) : Location
-{
+function parsePath(path: string): Location {
 	let [file, l, c] = path.split(':');
-	let p : Position = new Position(parseInt(l) - 1, parseInt(c) - 1)
+	let p: Position = new Position(parseInt(l) - 1, parseInt(c) - 1)
 	let uri = Uri.file(file);
-	return new Location(uri,p);
+	return new Location(uri, p);
 }
 
-function runRC(args: string[],  process: (stdout:string) => any, doc? : TextDocument )
-: Thenable<any>
-{
-   return new Promise((resolve, _reject) =>
-   {
-		if (doc && doc.isDirty)
-		{
+function runRC(args: string[], process: (stdout: string) => any, doc?: TextDocument)
+	: Thenable<any> {
+	return new Promise((resolve, _reject) => {
+		if (doc && doc.isDirty) {
 			const content = doc.getText()
 			const path = doc.uri.fsPath
 
 			const unsaved = path + ":" + content.length
-			args.push('--unsaved-file='+unsaved)
+			args.push('--unsaved-file=' + unsaved)
 		}
+		let rcExecutable = workspace.getConfiguration().get<string>("rtags.rcExecutable");
+		if (rcExecutable == null || rcExecutable.length == 0) {
+			rcExecutable = 'rc';
+		}
+		let child = execFile(rcExecutable, args,
+			{
+				maxBuffer: 4 * 1024 * 1024
+			},
+			(error, output, stderr) => {
+				if (error) {
+					window.showErrorMessage("error" + stderr + "," + error);
+					resolve([]);
+					return;
+				}
+				resolve(process(output));
+			}
+		)
 
-	   let child = execFile('rc', args,
-		   {
-			   maxBuffer: 4 * 1024*1024
-		   },
-		   (error, output, stderr) => {
-			   if (error)
-			   {
-				   window.showErrorMessage(stderr);
-				   resolve([]);
-				   return;
-			   }
-			   resolve(process(output));
-		   }
-	   )
-
-	   if (doc && doc.isDirty)
-		   child.stdin.write(doc.getText())
-   });
+		if (doc && doc.isDirty)
+			child.stdin.write(doc.getText())
+	});
 }
 
-function getCallers(document: TextDocument, uri: Uri, p: Position): Thenable<Caller[]>
-{
+function getCallers(document: TextDocument, uri: Uri, p: Position): Thenable<Caller[]> {
 	const at = toRtagsPos(uri, p);
 
-	let args =  ['-K', '-o', '--containing-function-location', '-r', at, '--json'];
+	let args = ['-K', '-o', '--containing-function-location', '-r', at, '--json'];
 
 	return runRC(args,
-			function(output:string)
-			{
-				let result: Caller[] = [];
+		function (output: string) {
+			let result: Caller[] = [];
 
-				const o = JSON.parse(output.toString());
+			const o = JSON.parse(output.toString());
 
-				for (let c of o) {
-					try {
-						let containerLocation = parsePath(c.cfl);
-						let doc = workspace.textDocuments.find(
-							(v, _i) => { return v.uri.fsPath == containerLocation.uri.fsPath }
-						)
-						result.push(
-							{
-								location: parsePath(c.loc),
-								containerName: c.cf.trim(),
-								containerLocation: containerLocation,
-								document: doc,
-								context: c.ctx.trim()
-							});
-					}
-					catch (err) {
-					}
+			for (let c of o) {
+				try {
+					let containerLocation = parsePath(c.cfl);
+					let doc = workspace.textDocuments.find(
+						(v, _i) => { return v.uri.fsPath == containerLocation.uri.fsPath }
+					)
+					result.push(
+						{
+							location: parsePath(c.loc),
+							containerName: c.cf.trim(),
+							containerLocation: containerLocation,
+							document: doc,
+							context: c.ctx.trim(),
+						});
 				}
+				catch (err) {
+				}
+			}
 
-				return result;
-			},
-			document);
+			return result;
+		},
+		document);
 }
 
-function getDefinitions(document: TextDocument, p: Position, type: number = ReferenceType.DEFINITION): Thenable<Location[]>
-{
+function getDefinitions(document: TextDocument, p: Position, type: number = ReferenceType.DEFINITION): Thenable<Location[]> {
 	const at = toRtagsPos(document.uri, p);
 
-	let args =  ['-K'];
+	let args = ['-K'];
 
-	switch(type)
-	{
+	switch (type) {
 		case ReferenceType.VIRTUALS:
 			args.push('-k', '-r', at); break;
 		case ReferenceType.REFERENCES:
@@ -148,34 +141,30 @@ function getDefinitions(document: TextDocument, p: Position, type: number = Refe
 	}
 
 	return runRC(args,
-			function(output:string)
-			{
-			let result : Location[] =  [];
+		function (output: string) {
+			let result: Location[] = [];
 			try {
-				for (let line of output.toString().split("\n"))
-				{
+				for (let line of output.toString().split("\n")) {
 					if (line == '')
 						continue;
 					let [location] = line.split("\t", 1);
 					result.push(parsePath(location));
 				}
 			}
-			catch (err)
-			{
+			catch (err) {
 				return result;
 			}
 
 			return result;
-			},
-			document);
+		},
+		document);
 }
 
-class Caller
-{
-	location : Location;
-	containerName : string;
-	containerLocation : Location;
-	document : TextDocument;
+class Caller {
+	location: Location;
+	containerName: string;
+	containerLocation: Location;
+	document: TextDocument;
 	context: string;
 }
 
@@ -188,48 +177,50 @@ class CallHierarchy
 	//onDidChangeTreeData :
 
 	getTreeItem(caller: Caller): TreeItem | Thenable<TreeItem> {
-		let ti = new TreeItem(caller.containerName + " : " + caller.context , TreeItemCollapsibleState.Collapsed);
-		ti.contextValue = "rtagsLocation"
-		// ti.command = {
-        //     command: 'rtags.selectLocation',
-        //     title: '',
-        //     arguments: [
-        //         caller
-        //     ]
-        // };
+		let text = caller.containerName;
+		if (caller.context != null && caller.context.length > 0) {
+			let name: String = caller.location.uri.path;
+			let idx = name.lastIndexOf(sep);
+			name = name.substring(idx + 1);
+			text = name + ":" + (caller.location.range.start.line + 1) + ":" + caller.context + " in " + caller.containerName;
+		}
+		let ti = new TreeItem(text, TreeItemCollapsibleState.Collapsed);
+		ti.contextValue = "rtagsLocation";
+		ti.command = {
+			command: "rtagsCallHierarchy.selectNode",
+			title: "SelectNode",
+			arguments: [caller]
+		};
 		return ti;
 	}
 
-	getChildren(node?: Caller): ProviderResult<Caller[]>
-	{
-		const list : Caller[] = []
-		if (!node)
-		{
+	getChildren(node?: Caller): ProviderResult<Caller[]> {
+		const list: Caller[] = []
+		if (!node) {
 			let pos = window.activeTextEditor.selection.active
 			let doc = window.activeTextEditor.document
 			let loc = new Location(doc.uri, pos);
 			list.push(
-			{
-				location: loc,
-				containerLocation : loc,
-				containerName: doc.getText(doc.getWordRangeAtPosition(pos)),
-				document: doc,
-				context: ""
-			})
+				{
+					location: loc,
+					containerLocation: loc,
+					containerName: doc.getText(doc.getWordRangeAtPosition(pos)),
+					document: doc,
+					context: ""
+				})
 			return list;
 		}
 
 		return getCallers(node.document, node.containerLocation.uri, node.containerLocation.range.start);
 	}
 
-	refresh(): void
-	{
+	refresh(): void {
 		this._onDidChangeTreeData.fire();
 	}
 
 
 }
-
+/*
 class RTagsCompletionItemProvider
 	implements
 	 CompletionItemProvider,
@@ -558,127 +549,202 @@ class RTagsCompletionItemProvider
 			setTimeout( () =>	this.listenToDiagnostics(), 10000);
 		});
 	}
-}
+}*/
 
 function toRtagsPos(uri: Uri, pos: Position) {
-	const at = uri.fsPath + ':' + (pos.line+1) + ':' + (pos.character+1);
+	const at = uri.fsPath + ':' + (pos.line + 1) + ':' + (pos.character + 1);
 	return at;
 }
 
-function processDiagnostics(output: string)
-{
+function processDiagnostics(output: string) {
 	if (output.trim().length == 0)
 		return;
 	let o;
-	try
-	{
+	try {
 		o = JSON.parse(output.toString());
 	}
-	catch (err)
-	{
+	catch (err) {
 		window.showErrorMessage("Diagnostics parse error: " + output.toString());
 		return;
 	}
 
 	//dc.clear();
-	for (var file in o.checkStyle)
-	{
+	for (var file in o.checkStyle) {
 		if (!o.checkStyle.hasOwnProperty(file))
 			continue;
 
-		let diags : Diagnostic[] = [];
+		let diags: Diagnostic[] = [];
 		let uri = Uri.file(file);
 
-		for (let d of o.checkStyle[file])
-		{
-			let p = new Position(d.line-1, d.column-1);
+		for (let d of o.checkStyle[file]) {
+			let p = new Position(d.line - 1, d.column - 1);
 			diags.push
-			(
-				{
-					message : d.message,
-					range : new Range(p,p),
-					severity : DiagnosticSeverity.Error,
-					source : 'rtags',
-					code: 0
-				}
-			)
+				(
+					{
+						message: d.message,
+						range: new Range(p, p),
+						severity: DiagnosticSeverity.Error,
+						source: 'rtags',
+						code: 0
+					}
+				)
 		}
 		dc.set(uri, diags);
 	}
 }
 
-function diagnostics(uri: Uri)
-{
+function diagnostics(uri: Uri) {
 	const path = uri.fsPath
 
-	runRC( [ '--json', '--diagnose', path], (_) => {}	);
+	runRC(['--json', '--diagnose', path], (_) => { });
 }
 
-
-function reindexUri(uri : Uri)
-{
+function updateCompileCommands(uri: Uri) {
+	// find compile_commands.json file in one of the parent folders
+	if (uri == null) {
+		uri = window.activeTextEditor.document.uri;
+	}
+	let compileCommands: String = uri.fsPath;
+	let idx = compileCommands.lastIndexOf(sep);
+	let found = false;
+	while (idx > 0) {
+		compileCommands = compileCommands.substring(0, idx);
+		if (existsSync(compileCommands + sep + "compile_commands.json")) {
+			compileCommands = compileCommands + sep + "compile_commands.json";
+			found = true;
+			break;
+		}
+		idx = compileCommands.lastIndexOf(sep);
+	}
+	if (found == false) {
+		window.showErrorMessage("compile_commands.json file not found");
+		return;
+	}
+	// read compile_commands.json
+	let jsonString = readFileSync(compileCommands.toString()).toString();
+	let json = JSON.parse(jsonString);
+	if (json.length==0) {
+		window.showErrorMessage("at least on entry in compile_commands.json must exist");
+		return;
+	}
+	//  ask for user input: window.showFileDialog not available? why?
+	window.showInputBox({
+		prompt: "Choose file containing g++ commands",
+		validateInput: (text: string): string | undefined => {
+			if (!text || existsSync(text) == false) {
+				return 'Specify a file';
+			} else {
+				return undefined;
+			}
+		},
+		value: uri.fsPath
+	}).then((value:string) => {
+		let directory = json[0].directory;
+		let map:Map<any,any> = new Map();
+		for (var i in json) {
+			let key:string=json[i].file;
+			map.set(key,json[i]);
+		}
+		let str:string = readFileSync(value).toString();
+		let start=0;
+		while(true) {
+			let idx = str.indexOf("g++ ",start);
+			if (idx<0) {
+				break;
+			}
+			let endLineIdx = str.indexOf("\n",idx);
+			// search beginning of line
+			while (true) {
+				if (str.charAt(idx-1)==='\n') {
+					break;
+				}
+				idx--;
+			}
+			let cmd = str.substring(idx,endLineIdx).trim();
+			idx = cmd.lastIndexOf(" ");
+			if (idx>0) {
+				let fileName = cmd.substring(idx+1);
+				let ex = map.get(fileName);
+				if (ex!=null) {
+					ex.command = cmd;
+				}else{
+					let ins = {"directory":directory,"file":fileName,"command":cmd};
+					json.push(ins);
+					map.set(ins.file,ins);
+				}
+			}
+			start=endLineIdx;
+		}
+		// save compile_commands.json file from json
+		writeFileSync(compileCommands.toString(),JSON.stringify(json,null,1));
+	});
+}
+function reindexUri(uri: Uri) {
 	runRC(['--reindex', uri.fsPath],
-		(output : string) : void => {
-				if (output == 'No matches')
+		(output: string): void => {
+			if (output == 'No matches')
 				return;
-				setTimeout(diagnostics, 1000, uri);
-			},
-		)
+			setTimeout(diagnostics, 1000, uri);
+		},
+	)
 }
 
 
-function addProjectUri(uri : Uri)
-{
+function addProjectUri(uri: Uri) {
 	runRC(['-J', uri.fsPath],
-		(output : string) : void => {
-				window.showInformationMessage(output);
-			},
-		)
+		(output: string): void => {
+			window.showInformationMessage(output);
+		},
+	)
 }
 
-function reindex(doc : TextDocument)
-{
+function reindex(doc: TextDocument) {
 	if (languages.match(RTAGS_MODE, doc) == 0)
 		return;
 
 	runRC(['--reindex', doc.uri.fsPath],
-		(output : string) : void => {
-				if (output == 'No matches')
+		(output: string): void => {
+			if (output == 'No matches')
 				return;
-				setTimeout(diagnostics, 1000, doc.uri);
-			},
+			setTimeout(diagnostics, 1000, doc.uri);
+		},
 		doc)
 }
 
-export function activate(context: ExtensionContext)
-{
-	let r = new RTagsCompletionItemProvider;
+export function activate(context: ExtensionContext) {
+	//let r = new RTagsCompletionItemProvider;
 	let ch = new CallHierarchy;
 
 	context.subscriptions.push(
-		r
-		,languages.registerCompletionItemProvider(RTAGS_MODE, r, '.', ':', '>')
-		,languages.registerWorkspaceSymbolProvider(r)
-		,languages.registerDocumentSymbolProvider(RTAGS_MODE, r)
-		,languages.registerHoverProvider(RTAGS_MODE, r)
-		,languages.registerDefinitionProvider(RTAGS_MODE, r)
-		,languages.registerTypeDefinitionProvider(RTAGS_MODE, r)
-		,languages.registerImplementationProvider(RTAGS_MODE, r)
-		,languages.registerReferenceProvider(RTAGS_MODE, r)
-		,languages.registerRenameProvider(RTAGS_MODE, r)
-		,languages.registerCodeActionsProvider(RTAGS_MODE, r)
-		,languages.registerSignatureHelpProvider(RTAGS_MODE, r, '(', ',')
-		,window.registerTreeDataProvider('rtagsCallHierarchy', ch)
-		,commands.registerCommand('rtags.addproject', (uri) => {addProjectUri(uri)})
-		,commands.registerCommand('rtags.reindex', (uri) => {reindexUri(uri)})
-		,commands.registerCommand('rtags.callhierarcy', () => ch.refresh())
-		,commands.registerCommand('rtags.selectLocation', (caller) => {
-			window.showTextDocument(caller.containerLocation.uri, {
-				selection: caller.location.range
-			})
-			})
+		//r
+		//,languages.registerCompletionItemProvider(RTAGS_MODE, r, '.', ':', '>')
+		//,languages.registerWorkspaceSymbolProvider(r)
+		//,languages.registerDocumentSymbolProvider(RTAGS_MODE, r)
+		//,languages.registerHoverProvider(RTAGS_MODE, r)
+		//,languages.registerDefinitionProvider(RTAGS_MODE, r)
+		//,languages.registerTypeDefinitionProvider(RTAGS_MODE, r)
+		//,languages.registerImplementationProvider(RTAGS_MODE, r)
+		//,languages.registerReferenceProvider(RTAGS_MODE, r)
+		//,languages.registerRenameProvider(RTAGS_MODE, r)
+		//,languages.registerCodeActionsProvider(RTAGS_MODE, r)
+		//,languages.registerSignatureHelpProvider(RTAGS_MODE, r, '(', ',')
+		//,
+		window.registerTreeDataProvider('rtagsCallHierarchy', ch)
+		, commands.registerCommand('rtags.addproject', (uri) => { addProjectUri(uri) })
+		, commands.registerCommand('rtags.reindex', (uri) => { reindexUri(uri) })
+		, commands.registerCommand('rtags.callhierarcy', () => ch.refresh())
+		, commands.registerCommand('rtags.updatecompilecommands', (uri) => { updateCompileCommands(uri) })
+		, commands.registerCommand('rtags.selectLocation', (caller) => {
+			window.showTextDocument(caller.containerLocation.uri, { selection: caller.location.range })
+		})
 	);
+	commands.registerCommand("rtagsCallHierarchy.selectNode", (item: Caller) => {
+		if (item != null && item.containerLocation != null && item.location != null) {
+			window.showTextDocument(item.containerLocation.uri, { selection: item.location.range });
+		}
+	});
 
+	/*
 	var timerId : NodeJS.Timer = null;
 	workspace.onDidChangeTextDocument((event) =>
 	{
@@ -690,11 +756,11 @@ export function activate(context: ExtensionContext)
 			timerId = null;
 		}, 1000);
 	});
+	*/
 
-	workspace.onDidSaveTextDocument( (doc) => {	reindex(doc) } );
+	//workspace.onDidSaveTextDocument( (doc) => {	reindex(doc) } );
 
-	r.listenToDiagnostics();
-
+	//r.listenToDiagnostics();
 
 
 	//commands.registerCommand('rtags.callhierarcy', )

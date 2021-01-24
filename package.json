@@ -36,34 +36,38 @@
 		"commands": [
 			{
 				"command": "rtags.callhierarcy",
-				"title": "Call Hierarchy"
+				"title": "Rtags: Call Hierarchy"
 			},
 			{
 				"command": "rtags.reindex",
-				"title": "Reindex file"
+				"title": "Rtags: Reindex file"
 			},
 			{
 				"command": "rtags.selectLocation",
-				"title": "Go to location"
+				"title": "Rtags: Go to location"
 			},
 			{
 				"command": "rtags.addproject",
-				"title": "Add project"
+				"title": "Rtags: Add project"
+			},
+			{
+				"command": "rtags.updatecompilecommands",
+				"title": "Rtags: Update compile_commands.json from file with g++ output"
 			}
-		],		
+		],
 		"views": {
 			"explorer": [
 				{
 					"id": "rtagsCallHierarchy",
-					"name": "CallHierarchy"
+					"name": "Rtags:CallHierarchy"
 				}
 			]
 		},
-		"menus": {						
+		"menus": {
 			"explorer/context": [
 				{
 					"command": "rtags.reindex",
-					"name": "Reindex"
+					"name": "Rtags:Reindex"
 				},
 				{
 					"command": "rtags.addproject",
@@ -74,7 +78,7 @@
 			"editor/context": [
 				{
 					"command": "rtags.callhierarcy",
-					"name": "CallHierarchy"
+					"name": "Rtags:CallHierarchy"
 				}
 			],
 			"view/item/context": [

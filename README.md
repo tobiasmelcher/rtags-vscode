@@ -1,4 +1,11 @@
 # README
+## Modifications done for my use case
+- disable code completion as I use the microsoft cpp language server. I only use rtags for where used/call hierarchy.
+- single click in call hierarchy view now opens the source location
+- call hierarchy tree items include file name and line number
+- introduce workspace setting `"rtags.rcExecutable"` to specify path to the rc executable
+- command updateCompileCommands
+
 ## This is the README for the "rtags client" 
 -------------------
 
