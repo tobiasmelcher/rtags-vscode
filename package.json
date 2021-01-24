@@ -10,13 +10,13 @@
 		"url": "https://github.com/yorver/rtags-vscode"
 	},
 	"devDependencies": {
-		"@types/mocha": "^2.2.42",
-		"@types/node": "^6.0.88",
-		"typescript": "^2.5.2",
-		"vscode": "^1.1.10"
+		"@types/mocha": "^5.2.6",
+		"@types/node": "^11.11.3",
+		"@types/vscode": "^1.28.0",
+		"typescript": "^3.9.3"
 	},
 	"engines": {
-		"vscode": "^1.16.0"
+		"vscode": "^1.28.0"
 	},
 	"categories": [
 		"Other"
